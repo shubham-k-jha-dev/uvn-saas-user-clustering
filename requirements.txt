@@ -1,0 +1,6 @@
+pymongo
+python-dotenv
+numpy
+scikit-learn
+scipy
+dotenv
