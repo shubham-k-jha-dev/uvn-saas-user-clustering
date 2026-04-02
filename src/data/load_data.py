@@ -1,7 +1,6 @@
 import os
 import logging
 from typing import Generator, Dict, Any, List
-
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
 from dotenv import load_dotenv

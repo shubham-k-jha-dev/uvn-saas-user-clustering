@@ -1,6 +1,5 @@
 import logging
 from typing import List, Dict, Any, Tuple
-
 import numpy as np
 from sklearn.cluster import MiniBatchKMeans
 
