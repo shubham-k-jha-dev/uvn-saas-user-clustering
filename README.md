@@ -15,7 +15,7 @@ This module performs user clustering based on behavioral features such as:
 
 It is designed to be:
 
-- Database-agnostic  
+- Database-agnostic(can work with any kind of database)
 - Scalable (batch-based)  
 - Easily integrable with backend systems  
 
