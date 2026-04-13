@@ -64,9 +64,12 @@ Output (JSON / API / DB)
 [
   {
     "userId": "u1",
-    "tenantId": "app_001",
-    "clusterId": 0,
-    "clusterLabel": "high_value_user"
+    "clusterLabel": "high_value_user",
+    "customerIntelligence": {
+      "engagementLevel": "high",
+      "churnRisk": "low",
+      "action": "Upsell premium features"
+    }
   }
 ]
 ```
@@ -87,14 +90,14 @@ python main.py
 ## Core API
 
 ```python
-from src.pipeline.clustering_pipeline import run_clustering_pipeline
+from src.pipelines.clustering_pipeline import run_clustering_pipeline
 
 results = run_clustering_pipeline(data)
 ```
 
 ## Integration (Backend)
 
-1. Pass user feature data into the pipeline
+1. Pass user feature data into the pipelines
 2. Store results in `user_clusters` collection
 3. Inject into API response:
 
@@ -108,9 +111,18 @@ results = run_clustering_pipeline(data)
 ## Key Design Principles
 
 - Separation of concerns
-- Database-independent ML pipeline
+- Database-independent ML pipelines
 - Batch processing (scalable)
 - Interpretable clustering
+
+## Features
+
+- Automated ML pipeline (MongoDB → Training → API)
+- User clustering using MiniBatchKMeans
+- Customer intelligence generation
+- Background model retraining
+- Model persistence (disk + memory)
+- REST API using FastAPI
 
 ## Future Improvements
 
@@ -134,7 +146,7 @@ MongoDB / Data Source
 ↓
 Aggregation → user_features
 ↓
-Clustering Pipeline
+Clustering pipelines
 ↓
 user_clusters (output)
 ↓

@@ -2,10 +2,11 @@ import logging
 from typing import List, Dict, Any
 
 import numpy as np
-
+from src.models.model_manager import get_model, set_model
 from src.data.preprocess import preprocess_batch
 from src.models.train_model import train_clustering_model, predict_clusters
 from src.features.build_features import label_clusters, attach_cluster_labels
+from src.features.customer_intelligence import enrich_with_customer_intelligence
 
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,19 @@ def run_clustering_pipeline(
         return []
 
     # train model
-    model = train_clustering_model(X)
+    model = get_model()
+
+    # Only train if enough data
+    if model is None:
+        if X.shape[0] < 10:
+            logger.warning("Not enough data to train model. Need at least 10 users.")
+            raise ValueError("Insufficient data for training model")
+
+        logger.info("Training model with sufficient data...")
+        model = train_clustering_model(X)
+        set_model(model)
+    else:
+        logger.info("Using cached model")
 
     # predict clusters
     cluster_results = predict_clusters(model, X, metadata)
@@ -55,6 +68,12 @@ def run_clustering_pipeline(
     # attach labels
     final_results = attach_cluster_labels(cluster_results, cluster_labels)
 
-    logger.info("Clustering pipeline completed successfully")
+    # add customer intelligence layer
+    final_results = enrich_with_customer_intelligence(final_results)
+
+    logger.info(
+        "Clustering + intelligence pipeline completed successfully "
+        f"for {len(final_results)} users"
+    )
 
     return final_results

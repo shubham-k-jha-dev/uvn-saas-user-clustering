@@ -112,7 +112,7 @@ def preprocess_batch(
     batch: List[Dict[str, Any]]
 ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
     """
-    Main preprocessing pipeline
+    Main preprocessing pipelines
     """
 
     X, metadata = build_feature_matrix(batch)

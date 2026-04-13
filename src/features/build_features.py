@@ -36,38 +36,45 @@ def score_cluster(center: np.ndarray) -> float:
 
     return score
 
-def label_clusters(model) -> Dict[int, str]:
+def label_clusters(model) -> dict:
     """
-    Assign business labels to clusters
+    Assign meaningful labels to clusters based on cluster centers
     """
+
+    import numpy as np
 
     centers = model.cluster_centers_
 
-    cluster_scores = []
+    cluster_labels = {}
 
     for i, center in enumerate(centers):
-        score = score_cluster(center)
-        cluster_scores.append((i, score))
 
-    # sort by score descending
-    cluster_scores.sort(key=lambda x: x[1], reverse=True)
+        session_count = center[0]
+        avg_time = center[1]
+        pages = center[2]
+        clicks = center[3]
+        bounce = center[4]
+        recency = center[5]
 
-    labels = {}
+        # High value users
+        if session_count > 20 and avg_time > 10 and bounce < 0.3:
+            label = "high_value_user"
 
-    for rank, (cluster_id, _) in enumerate(cluster_scores):
+        # Drop-off users
+        elif session_count < 3 and bounce > 0.7 and recency > 10:
+            label = "drop_off_user"
 
-        if rank == 0:
-            labels[cluster_id] = "high_value_user"
-        elif rank == 1:
-            labels[cluster_id] = "engaged_user"
-        elif rank == 2:
-            labels[cluster_id] = "casual_user"
+        # Engaged users
+        elif session_count > 10 and bounce < 0.5:
+            label = "engaged_user"
+
+        # Default
         else:
-            labels[cluster_id] = "drop_off_user"
+            label = "casual_user"
 
-    logger.info(f"Cluster labeling completed: {labels}")
+        cluster_labels[i] = label
 
-    return labels
+    return cluster_labels
 
 
 def attach_cluster_labels(
