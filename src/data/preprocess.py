@@ -1,7 +1,6 @@
 import logging
 from typing import List, Dict, Any, Tuple
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 
 logger = logging.getLogger(__name__)
 
@@ -74,16 +73,16 @@ def build_feature_matrix(
             "_id": str(doc.get("_id"))
         })
 
-    X = np.array(features, dtype=np.float32)
+    X = np.array(features, dtype=np.float64)
 
     logger.info(f"Built feature matrix with shape: {X.shape}")
 
     return X, metadata
 
-# Main transformation part
-def transform_features(X: np.ndarray) -> np.ndarray:
+def apply_log_transform(X: np.ndarray) -> np.ndarray:
     """
-    Apply log + scaling transformations
+    Apply log1p to skewed columns only.
+    Does NOT scale — scaling is done by the sklearn Pipeline.
     """
 
     if X.shape[0] == 0:
@@ -92,30 +91,26 @@ def transform_features(X: np.ndarray) -> np.ndarray:
 
     X_transformed = X.copy()
 
-    # log scaling
+    # log1p compresses outliers on high-cardinality columns
     X_transformed[:, 0] = np.log1p(X_transformed[:, 0])  # sessionCount
     X_transformed[:, 1] = np.log1p(X_transformed[:, 1])  # avgSessionTime
     X_transformed[:, 3] = np.log1p(X_transformed[:, 3])  # clicksPerSession
 
-    #log1p compresses massive outliers
-    
-    # scaling
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_transformed)
+    logger.info("Log transform applied")
 
-    logger.info("Feature transformation completed")
-
-    return X_scaled
+    return X_transformed
 
 
 def preprocess_batch(
     batch: List[Dict[str, Any]]
 ) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
     """
-    Main preprocessing pipelines
+    Builds the raw feature matrix with log transforms applied.
+    StandardScaler is applied externally by the sklearn Pipeline
+    so the same mean/std from training is reused during inference.
     """
 
     X, metadata = build_feature_matrix(batch)
-    X = transform_features(X)
+    X = apply_log_transform(X)
 
     return X, metadata

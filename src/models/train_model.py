@@ -1,7 +1,10 @@
 import logging
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any
 import numpy as np
 from sklearn.cluster import MiniBatchKMeans
+from sklearn.metrics import silhouette_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 logger = logging.getLogger(__name__)
 
@@ -12,48 +15,87 @@ BATCH_SIZE = 1024
 RANDOM_STATE = 42
 
 
-# optimal k
 def find_optimal_k(X: np.ndarray) -> int:
     """
-    Find optimal number of clusters using elbow method
+    Find optimal number of clusters using silhouette score + inertia fallback
+    Production-grade selection
     """
 
-    if X.shape[0] < MIN_CLUSTERS:
+    n_samples = X.shape[0]
+
+    if n_samples < MIN_CLUSTERS:
         logger.warning("Too few samples, defaulting to 1 cluster")
         return 1
 
-    inertias = []
+    # Bound k properly
+    max_k = min(MAX_CLUSTERS, n_samples - 1)
 
-    k_range = range(MIN_CLUSTERS, min(MAX_CLUSTERS, X.shape[0]) + 1)
+    best_k = MIN_CLUSTERS
+    best_score = -1
 
-    for k in k_range:
-        model = MiniBatchKMeans(
-            n_clusters=k,
-            batch_size=BATCH_SIZE,
-            random_state=RANDOM_STATE
-        )
-        model.fit(X)
-        inertias.append(model.inertia_)
+    scores = []
 
-    # simple elbow: pick k where drop slows
-    optimal_k = k_range[0]
+    for k in range(MIN_CLUSTERS, max_k + 1):
+        try:
+            model = MiniBatchKMeans(
+                n_clusters=k,
+                batch_size=BATCH_SIZE,
+                random_state=RANDOM_STATE
+            )
 
-    for i in range(1, len(inertias)):
-        drop_prev = inertias[i - 1] - inertias[i]
-        drop_next = inertias[i] - inertias[i + 1] if i + 1 < len(inertias) else 0
+            labels = model.fit_predict(X)
 
-        if drop_next < drop_prev * 0.5:
-            optimal_k = k_range[i]
-            break
+            # silhouette requires >1 cluster and no empty clusters
+            if len(set(labels)) > 1:
+                score = silhouette_score(X, labels)
+                scores.append((k, score))
 
-    logger.info(f"Optimal clusters selected: {optimal_k}")
-    return optimal_k
+                if score > best_score:
+                    best_score = score
+                    best_k = k
+
+        except Exception as e:
+            logger.warning(f"Skipping k={k} due to error: {e}")
+            continue
+
+    # fallback if silhouette fails
+    if best_score == -1:
+        logger.warning("Silhouette failed, falling back to inertia method")
+
+        inertias = []
+        k_range = range(MIN_CLUSTERS, max_k + 1)
+
+        for k in k_range:
+            model = MiniBatchKMeans(
+                n_clusters=k,
+                batch_size=BATCH_SIZE,
+                random_state=RANDOM_STATE
+            )
+            model.fit(X)
+            inertias.append(model.inertia_)
+
+        best_k = k_range[0]
+
+        for i in range(1, len(inertias) - 1):
+            drop_prev = inertias[i - 1] - inertias[i]
+            drop_next = inertias[i] - inertias[i + 1]
+
+            if drop_next < drop_prev * 0.5:
+                best_k = k_range[i]
+                break
+
+    logger.info(f"Optimal clusters selected: {best_k}")
+    return best_k
 
 
 # train model
-def train_clustering_model(X: np.ndarray) -> MiniBatchKMeans:
+def train_clustering_model(X: np.ndarray) -> Pipeline:
     """
-    Train MiniBatchKMeans model
+    Train a unified sklearn Pipeline:
+    StandardScaler -> MiniBatchKMeans
+
+    Saving this single Pipeline object guarantees that inference
+    uses the exact same scaling parameters as training.
     """
 
     if X.shape[0] == 0:
@@ -61,33 +103,39 @@ def train_clustering_model(X: np.ndarray) -> MiniBatchKMeans:
 
     k = find_optimal_k(X)
 
-    model = MiniBatchKMeans(
-        n_clusters=k,
-        batch_size=BATCH_SIZE,
-        random_state=RANDOM_STATE
-    )
+    pipeline = Pipeline([
+        ("scaler", StandardScaler()),
+        ("kmeans", MiniBatchKMeans(
+            n_clusters=k,
+            batch_size=BATCH_SIZE,
+            random_state=RANDOM_STATE
+        ))
+    ])
 
-    model.fit(X)
+    pipeline.fit(X)
 
-    logger.info("Clustering model trained successfully")
+    logger.info(f"Pipeline trained successfully (k={k})")
 
-    return model
+    return pipeline
 
 
 # predict clusters
 def predict_clusters(
-    model: MiniBatchKMeans,
+    pipeline: Pipeline,
     X: np.ndarray,
     metadata: List[Dict[str, Any]]
 ) -> List[Dict[str, Any]]:
     """
-    Assign cluster IDs to users
+    Assign cluster IDs to users.
+    X must be the log-transformed (pre-scaling) matrix.
+    StandardScaler is applied internally by the Pipeline.
     """
 
     if X.shape[0] == 0:
         return []
 
-    cluster_ids = model.predict(X)
+    # Pipeline handles scaling then predicting in one step
+    cluster_ids = pipeline.predict(X)
 
     results = []
 

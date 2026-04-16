@@ -3,96 +3,90 @@ from typing import Dict, List
 
 import numpy as np
 
-
 logger = logging.getLogger(__name__)
 
-IDX = {
+_IDX = {
     "sessionCount": 0,
     "avgSessionTime": 1,
     "pagesPerSession": 2,
     "clicksPerSession": 3,
     "bounceRate": 4,
-    "recencyDays": 5
+    "recencyDays": 5,
+}
+
+# Weights for engagement scoring.
+# Positive: more is better. Negative: more is worse.
+# Weights sum to ~1.0 for interpretability.
+_WEIGHTS = {
+    "sessionCount": 0.25,
+    "avgSessionTime": 0.20,
+    "pagesPerSession": 0.20,
+    "clicksPerSession": 0.20,
+    "bounceRate": -0.10,   # high bounce = low engagement
+    "recencyDays": -0.05,  # stale user = lower engagement
 }
 
 
-def score_cluster(center: np.ndarray) -> float:
+def score_centroid(center: np.ndarray) -> float:
     """
-    Compute engagement score for cluster
-    Higher = better user
+    Compute a single engagement score for a cluster centroid.
     """
-
-    score = 0
-
-    # positive signals
-    score += center[IDX["sessionCount"]]
-    score += center[IDX["avgSessionTime"]]
-    score += center[IDX["clicksPerSession"]]
-    score += center[IDX["pagesPerSession"]]
-
-    # negative signals
-    score -= center[IDX["bounceRate"]]
-    score -= center[IDX["recencyDays"]]
-
+    score = 0.0
+    for feature, weight in _WEIGHTS.items():
+        score += center[_IDX[feature]] * weight
     return score
 
-def label_clusters(model) -> dict:
+
+def label_clusters(pipeline) -> Dict[int, str]:
     """
-    Assign meaningful labels to clusters based on cluster centers
+    Assign a semantic label to every cluster based on relative engagement rank.
+
     """
+    kmeans = pipeline.named_steps["kmeans"]
+    centroids = kmeans.cluster_centers_
+    k = len(centroids)
 
-    import numpy as np
+    # Score each centroid
+    scored = [(cluster_id, score_centroid(center)) for cluster_id, center in enumerate(centroids)]
 
-    centers = model.cluster_centers_
+    # Sort descending: rank 0 is the most engaged cluster
+    scored.sort(key=lambda x: x[1], reverse=True)
 
-    cluster_labels = {}
+    label_map: Dict[int, str] = {}
 
-    for i, center in enumerate(centers):
-
-        session_count = center[0]
-        avg_time = center[1]
-        pages = center[2]
-        clicks = center[3]
-        bounce = center[4]
-        recency = center[5]
-
-        # High value users
-        if session_count > 20 and avg_time > 10 and bounce < 0.3:
+    for rank, (cluster_id, score) in enumerate(scored):
+        if k == 1:
+            # Only one cluster — no meaningful differentiation
+            label = "casual_user"
+        elif rank == 0:
             label = "high_value_user"
-
-        # Drop-off users
-        elif session_count < 3 and bounce > 0.7 and recency > 10:
+        elif rank == k - 1:
+            # Always label the absolute worst cluster as drop_off,
+            # regardless of K. This guarantees drop_off_user is reachable.
             label = "drop_off_user"
-
-        # Engaged users
-        elif session_count > 10 and bounce < 0.5:
+        elif rank == 1:
             label = "engaged_user"
-
-        # Default
         else:
+            # Any middle cluster (rank 2..K-2) is casual
             label = "casual_user"
 
-        cluster_labels[i] = label
+        label_map[cluster_id] = label
+        logger.debug("Cluster %d → rank %d → %s (score=%.4f)", cluster_id, rank, label, score)
 
-    return cluster_labels
+    logger.info("label_clusters: K=%d, mapping=%s", k, label_map)
+    return label_map
 
 
 def attach_cluster_labels(
     cluster_results: List[Dict],
-    cluster_labels: Dict[int, str]
+    cluster_labels: Dict[int, str],
 ) -> List[Dict]:
     """
-    Add labels to user cluster results
+    Joins cluster prediction results with the label map.
     """
-
     enriched = []
-
     for item in cluster_results:
         cluster_id = item["clusterId"]
-
-        enriched.append({
-            **item,
-            "clusterLabel": cluster_labels.get(cluster_id, "unknown")
-        })
-
+        label = cluster_labels.get(cluster_id, "unknown")
+        enriched.append({**item, "clusterLabel": label})
     return enriched

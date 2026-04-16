@@ -54,3 +54,21 @@ def enrich_with_customer_intelligence(
     logger.info(f"Customer intelligence added for {len(enriched_results)} users")
 
     return enriched_results
+
+def override_high_value_user(user, current_label):
+    """
+    Rule-based override for strong signals
+    """
+
+    fs = user["featureSummary"]
+
+    if (
+        fs["sessionCount"] > 50 and
+        fs["avgSessionTime"] > 20 and
+        fs["pagesPerSession"] > 10 and
+        fs["bounceRate"] < 0.2 and
+        fs["recencyDays"] <= 2
+    ):
+        return "high_value_user"
+
+    return current_label

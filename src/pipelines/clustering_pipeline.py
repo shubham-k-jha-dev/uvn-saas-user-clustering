@@ -1,79 +1,120 @@
 import logging
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 import numpy as np
-from src.models.model_manager import get_model, set_model
-from src.data.preprocess import preprocess_batch
-from src.models.train_model import train_clustering_model, predict_clusters
-from src.features.build_features import label_clusters, attach_cluster_labels
-from src.features.customer_intelligence import enrich_with_customer_intelligence
 
+from src.data.preprocess import preprocess_batch
+from src.features.build_features import attach_cluster_labels, label_clusters
+from src.features.customer_intelligence import (
+    enrich_with_customer_intelligence,
+    override_high_value_user,
+)
+from src.features.user_aggregator import aggregate_user_sessions
+from src.models.train_model import predict_clusters
 
 logger = logging.getLogger(__name__)
 
+
+# Input validation
+
 def validate_input(data: List[Dict[str, Any]]) -> None:
+    """
+    Validates the structure of incoming user dicts.
+
+    """
     if not isinstance(data, list):
-        raise ValueError("Input data must be a list of dictionaries")
+        raise ValueError("Input data must be a list of user dicts")
 
     if len(data) == 0:
-        raise ValueError("Input data is empty")
+        raise ValueError("Input data must not be empty")
 
     required_keys = {"userId", "tenantId", "featureSummary"}
-
     for i, item in enumerate(data):
-        if not required_keys.issubset(item.keys()):
-            raise ValueError(f"Missing required keys in item index {i}")
+        missing = required_keys - set(item.keys())
+        if missing:
+            raise ValueError(
+                f"User at index {i} is missing required keys: {missing}"
+            )
 
 
-def run_clustering_pipeline(
-    data: List[Dict[str, Any]]
+# Business-rule override layer
+def _apply_business_overrides(
+    final_results: List[Dict[str, Any]],
+    data: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
     """
-    Main clustering pipeline
+    Applies deterministic business rules on top of ML cluster labels.
+    This layer sits AFTER label assignment so the ML output is always
+    visible in logs and the override is a deliberate, transparent correction.
     """
+    corrected = []
+    for i, result in enumerate(final_results):
+        original_label = result["clusterLabel"]
+        corrected_label = override_high_value_user(data[i], original_label)
 
-    logger.info("Starting clustering pipeline")
+        if corrected_label != original_label:
+            logger.info(
+                "Business override for user %s: %s → %s",
+                result.get("userId"),
+                original_label,
+                corrected_label,
+            )
 
-    # validate input
+        corrected.append({**result, "clusterLabel": corrected_label})
+    return corrected
+
+
+# Main pipeline
+
+def run_clustering_pipeline(
+    data: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Runs the full inference pipeline for a batch of users.
+    """
+    from src.models.model_manager import get_model
+
+    logger.info("Clustering pipeline: starting for %d users", len(data))
+
+    # Validate
     validate_input(data)
 
-    # preprocess
-    X, metadata = preprocess_batch(data)
+    # Aggregate multi-session docs per user
+    aggregated = aggregate_user_sessions(data)
+
+    # Build raw feature matrix + log transforms (no scaling here)
+    X, metadata = preprocess_batch(aggregated)
 
     if X.shape[0] == 0:
-        logger.warning("No valid data after preprocessing")
+        logger.warning("Clustering pipeline: no valid rows after preprocessing")
         return []
 
-    # train model
+    # Load the cached Pipeline (scaler + kmeans) from the singleton.
+    #    We do NOT train here. Training is the responsibility of
+    #    training_pipeline.py. If the model is absent, fail fast.
     model = get_model()
-
-    # Only train if enough data
     if model is None:
-        if X.shape[0] < 10:
-            logger.warning("Not enough data to train model. Need at least 10 users.")
-            raise ValueError("Insufficient data for training model")
+        raise ValueError(
+            "No model loaded. Call POST /train-model before running inference."
+        )
 
-        logger.info("Training model with sufficient data...")
-        model = train_clustering_model(X)
-        set_model(model)
-    else:
-        logger.info("Using cached model")
-
-    # predict clusters
+    # Scale → predict (both handled by the Pipeline in one call)
     cluster_results = predict_clusters(model, X, metadata)
 
-    # label clusters
+    # Score centroids → rank → assign semantic labels
     cluster_labels = label_clusters(model)
 
-    # attach labels
+    # Attach labels to each user
     final_results = attach_cluster_labels(cluster_results, cluster_labels)
 
-    # add customer intelligence layer
+    # Apply business-rule overrides (transparent log on every correction)
+    final_results = _apply_business_overrides(final_results, aggregated)
+
+    # Enrich with customer intelligence
     final_results = enrich_with_customer_intelligence(final_results)
 
     logger.info(
-        "Clustering + intelligence pipeline completed successfully "
-        f"for {len(final_results)} users"
+        "Clustering pipeline: complete for %d users",
+        len(final_results),
     )
-
     return final_results
